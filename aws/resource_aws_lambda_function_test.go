@@ -1662,6 +1662,10 @@ resource "aws_security_group" "sg_for_lambda" {
   description = "Allow all inbound traffic for lambda test"
   vpc_id      = "${aws_vpc.vpc_for_lambda.id}"
 
+  timeouts {
+    delete = "25m"
+  }
+
   ingress {
     from_port   = 0
     to_port     = 0

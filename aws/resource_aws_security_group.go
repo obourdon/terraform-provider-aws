@@ -1412,7 +1412,7 @@ func deleteLingeringLambdaENIs(conn *ec2.EC2, d *schema.ResourceData, filterName
 			},
 			{
 				Name:   aws.String("description"),
-				Values: []*string{aws.String("AWS Lambda VPC ENI: *")},
+				Values: []*string{aws.String("AWS Lambda VPC ENI*")},
 			},
 		},
 	}
@@ -1438,21 +1438,40 @@ func deleteLingeringLambdaENIs(conn *ec2.EC2, d *schema.ResourceData, filterName
 			if isAWSErr(detachNetworkInterfaceErr, "InvalidNetworkInterfaceID.NotFound", "") {
 				return nil
 			}
+			if isAWSErr(detachNetworkInterfaceErr, "OperationNotPermitted", "You are not allowed to manage 'ela-attach' attachments") {
+				log.Printf("[DEBUG] Waiting for ENI (%s) to become available", *eni.NetworkInterfaceId)
+				stateConf := &resource.StateChangeConf{
+					Pending: []string{"false"},
+					Target:  []string{"true"},
+					Refresh: networkInterfaceAvailableRefreshFunc(conn, *eni.NetworkInterfaceId),
+					Timeout: d.Timeout(schema.TimeoutDelete),
+				}
+				if _, err := stateConf.WaitForState(); err != nil {
+					if err.Error() == "Improper number of interfaces returned: 0" {
+						return nil
+					}
+					return fmt.Errorf(
+						"Error waiting for ENI (%s) to become available: %s", *eni.NetworkInterfaceId, err)
+				}
+			} else {
+				if detachNetworkInterfaceErr != nil {
+					return detachNetworkInterfaceErr
+				}
 
-			if detachNetworkInterfaceErr != nil {
-				return detachNetworkInterfaceErr
-			}
-
-			log.Printf("[DEBUG] Waiting for ENI (%s) to become detached", *eni.NetworkInterfaceId)
-			stateConf := &resource.StateChangeConf{
-				Pending: []string{"true"},
-				Target:  []string{"false"},
-				Refresh: networkInterfaceAttachedRefreshFunc(conn, *eni.NetworkInterfaceId),
-				Timeout: d.Timeout(schema.TimeoutDelete),
-			}
-			if _, err := stateConf.WaitForState(); err != nil {
-				return fmt.Errorf(
-					"Error waiting for ENI (%s) to become detached: %s", *eni.NetworkInterfaceId, err)
+				log.Printf("[DEBUG] Waiting for ENI (%s) to become detached", *eni.NetworkInterfaceId)
+				stateConf := &resource.StateChangeConf{
+					Pending: []string{"true"},
+					Target:  []string{"false"},
+					Refresh: networkInterfaceAttachedRefreshFunc(conn, *eni.NetworkInterfaceId),
+					Timeout: d.Timeout(schema.TimeoutDelete),
+				}
+				if _, err := stateConf.WaitForState(); err != nil {
+					if err.Error() == "Improper number of interfaces returned: 0" {
+						return nil
+					}
+					return fmt.Errorf(
+						"Error waiting for ENI (%s) to become detached: %s", *eni.NetworkInterfaceId, err)
+				}
 			}
 		}
 
@@ -1471,6 +1490,43 @@ func deleteLingeringLambdaENIs(conn *ec2.EC2, d *schema.ResourceData, filterName
 	}
 
 	return nil
+}
+
+func networkInterfaceAvailableRefreshFunc(conn *ec2.EC2, id string) resource.StateRefreshFunc {
+	return func() (interface{}, string, error) {
+
+		itfParams := &ec2.DescribeNetworkInterfacesInput{
+			Filters: []*ec2.Filter{
+				{
+					Name:   aws.String("description"),
+					Values: []*string{aws.String("AWS Lambda VPC ENI*")},
+				},
+				{
+					Name:   aws.String("network-interface-id"),
+					Values: []*string{aws.String(id)},
+				},
+			},
+		}
+		networkInterfaceResp, err := conn.DescribeNetworkInterfaces(itfParams)
+
+		if isAWSErr(err, "InvalidNetworkInterfaceID.NotFound", "") {
+			return nil, "", err
+		}
+
+		if err != nil {
+			return nil, "", err
+		}
+
+		// Then we detach and finally delete those
+		v := networkInterfaceResp.NetworkInterfaces
+		if len(v) != 1 {
+			return nil, "", fmt.Errorf("Improper number of interfaces returned: %d", len(v))
+		}
+		eni := v[0]
+		isAvailable := strconv.FormatBool(*eni.Status == "available")
+		log.Printf("[DEBUG] ENI %s is available %s", id, isAvailable)
+		return eni, isAvailable, nil
+	}
 }
 
 func networkInterfaceAttachedRefreshFunc(conn *ec2.EC2, id string) resource.StateRefreshFunc {
