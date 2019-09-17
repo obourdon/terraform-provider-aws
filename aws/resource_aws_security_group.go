@@ -1439,12 +1439,16 @@ func deleteLingeringLambdaENIs(conn *ec2.EC2, d *schema.ResourceData, filterName
 				return nil
 			}
 			if isAWSErr(detachNetworkInterfaceErr, "OperationNotPermitted", "You are not allowed to manage 'ela-attach' attachments") {
+				locTimeout := d.Timeout(schema.TimeoutDelete)
+				if int64(locTimeout) <= int64(20*time.Minute) {
+					locTimeout = *schema.DefaultTimeout(25 * time.Minute)
+				}
 				log.Printf("[DEBUG] Waiting for ENI (%s) to become available", *eni.NetworkInterfaceId)
 				stateConf := &resource.StateChangeConf{
 					Pending: []string{"false"},
 					Target:  []string{"true"},
 					Refresh: networkInterfaceAvailableRefreshFunc(conn, *eni.NetworkInterfaceId),
-					Timeout: d.Timeout(schema.TimeoutDelete),
+					Timeout: locTimeout,
 				}
 				if _, err := stateConf.WaitForState(); err != nil {
 					if err.Error() == "Improper number of interfaces returned: 0" {
