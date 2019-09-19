@@ -98,6 +98,7 @@ func resourceAwsSubnet() *schema.Resource {
 }
 
 func resourceAwsSubnetCreate(d *schema.ResourceData, meta interface{}) error {
+	log.Printf("[DEBUG] OLIVIER1 Subnet create vpc: %v Timeout: %v", d.Get("vpc_id").(string), d.Timeout(schema.TimeoutDelete))
 	conn := meta.(*AWSClient).ec2conn
 
 	createOpts := &ec2.CreateSubnetInput{
@@ -115,16 +116,17 @@ func resourceAwsSubnetCreate(d *schema.ResourceData, meta interface{}) error {
 	resp, err := conn.CreateSubnet(createOpts)
 
 	if err != nil {
+		log.Printf("[DEBUG] OLIVIER1 Subnet create vpc: %v Error creating subnet: %s", d.Get("vpc_id").(string), err)
 		return fmt.Errorf("Error creating subnet: %s", err)
 	}
 
 	// Get the ID and store it
 	subnet := resp.Subnet
 	d.SetId(*subnet.SubnetId)
-	log.Printf("[INFO] Subnet ID: %s", *subnet.SubnetId)
+	log.Printf("[INFO] OLIVIER1 Subnet create vpc: %v Subnet ID: %s", d.Get("vpc_id").(string), *subnet.SubnetId)
 
 	// Wait for the Subnet to become available
-	log.Printf("[DEBUG] Waiting for subnet (%s) to become available", *subnet.SubnetId)
+	log.Printf("[DEBUG] OLIVIER1 Waiting for subnet (%s) to become available", *subnet.SubnetId)
 	stateConf := &resource.StateChangeConf{
 		Pending: []string{"pending"},
 		Target:  []string{"available"},
@@ -135,15 +137,18 @@ func resourceAwsSubnetCreate(d *schema.ResourceData, meta interface{}) error {
 	_, err = stateConf.WaitForState()
 
 	if err != nil {
+		log.Printf("[DEBUG] OLIVIER1 Subnet create vpc: %v Subnet ID: %s Error waiting for subnet to become ready: %s", d.Get("vpc_id").(string), d.Id(), err)
 		return fmt.Errorf(
 			"Error waiting for subnet (%s) to become ready: %s",
 			d.Id(), err)
 	}
+	log.Printf("[DEBUG] OLIVIER1 Subnet create vpc: %v Subnet ID: %s OK", d.Get("vpc_id").(string), *subnet.SubnetId)
 
 	return resourceAwsSubnetUpdate(d, meta)
 }
 
 func resourceAwsSubnetRead(d *schema.ResourceData, meta interface{}) error {
+	log.Printf("[DEBUG] OLIVIER1 Subnet read: %v Timeout: %v", d.Id(), d.Timeout(schema.TimeoutDelete))
 	conn := meta.(*AWSClient).ec2conn
 
 	resp, err := conn.DescribeSubnets(&ec2.DescribeSubnetsInput{
@@ -151,7 +156,9 @@ func resourceAwsSubnetRead(d *schema.ResourceData, meta interface{}) error {
 	})
 
 	if err != nil {
+		log.Printf("[DEBUG] OLIVIER1 Subnet read: %v Error: %s", d.Id(), err)
 		if ec2err, ok := err.(awserr.Error); ok && ec2err.Code() == "InvalidSubnetID.NotFound" {
+			log.Printf("[DEBUG] OLIVIER1 Subnet read: %v No longer exist: %s", d.Id(), err)
 			// Update state to indicate the subnet no longer exists.
 			d.SetId("")
 			return nil
@@ -159,6 +166,7 @@ func resourceAwsSubnetRead(d *schema.ResourceData, meta interface{}) error {
 		return err
 	}
 	if resp == nil {
+		log.Printf("[DEBUG] OLIVIER1 Subnet read: %v NIL", d.Id())
 		return nil
 	}
 
@@ -186,16 +194,19 @@ func resourceAwsSubnetRead(d *schema.ResourceData, meta interface{}) error {
 	d.Set("arn", subnet.SubnetArn)
 	d.Set("tags", tagsToMap(subnet.Tags))
 	d.Set("owner_id", subnet.OwnerId)
+	log.Printf("[DEBUG] OLIVIER1 Subnet read: %v OK", d.Id())
 
 	return nil
 }
 
 func resourceAwsSubnetUpdate(d *schema.ResourceData, meta interface{}) error {
+	log.Printf("[DEBUG] OLIVIER1 Subnet update: %v Timeout: %v", d.Id(), d.Timeout(schema.TimeoutDelete))
 	conn := meta.(*AWSClient).ec2conn
 
 	d.Partial(true)
 
 	if err := setTags(conn, d); err != nil {
+		log.Printf("[DEBUG] OLIVIER1 Subnet update: %v SetTags Error: %s", d.Id(), err)
 		return err
 	} else {
 		d.SetPartial("tags")
@@ -214,6 +225,7 @@ func resourceAwsSubnetUpdate(d *schema.ResourceData, meta interface{}) error {
 		_, err := conn.ModifySubnetAttribute(modifyOpts)
 
 		if err != nil {
+			log.Printf("[DEBUG] OLIVIER1 Subnet update: %v ModifySubnetAttribute Error: %s", d.Id(), err)
 			return err
 		} else {
 			d.SetPartial("map_public_ip_on_launch")
@@ -238,6 +250,7 @@ func resourceAwsSubnetUpdate(d *schema.ResourceData, meta interface{}) error {
 
 			_, err := conn.DisassociateSubnetCidrBlock(disassociateOps)
 			if err != nil {
+				log.Printf("[DEBUG] OLIVIER1 Subnet update: %v DisassociateSubnetCidrBlock Error: %s", d.Id(), err)
 				return err
 			}
 
@@ -252,6 +265,7 @@ func resourceAwsSubnetUpdate(d *schema.ResourceData, meta interface{}) error {
 				Timeout: 3 * time.Minute,
 			}
 			if _, err := stateConf.WaitForState(); err != nil {
+				log.Printf("[DEBUG] OLIVIER1 Subnet update: %v WaitForState 1 Error: %s", d.Id(), err)
 				return fmt.Errorf(
 					"Error waiting for IPv6 CIDR (%s) to become disassociated: %s",
 					d.Id(), err)
@@ -266,6 +280,7 @@ func resourceAwsSubnetUpdate(d *schema.ResourceData, meta interface{}) error {
 
 		resp, err := conn.AssociateSubnetCidrBlock(associatesOpts)
 		if err != nil {
+			log.Printf("[DEBUG] OLIVIER1 Subnet update: %v AssociateSubnetCidrBlock Error: %s", d.Id(), err)
 			//The big question here is, do we want to try and reassociate the old one??
 			//If we have a failure here, then we may be in a situation that we have nothing associated
 			return err
@@ -282,6 +297,7 @@ func resourceAwsSubnetUpdate(d *schema.ResourceData, meta interface{}) error {
 			Timeout: 3 * time.Minute,
 		}
 		if _, err := stateConf.WaitForState(); err != nil {
+			log.Printf("[DEBUG] OLIVIER1 Subnet update: %v WaitForState 2 Error: %s", d.Id(), err)
 			return fmt.Errorf(
 				"Error waiting for IPv6 CIDR (%s) to become associated: %s",
 				d.Id(), err)
@@ -303,6 +319,7 @@ func resourceAwsSubnetUpdate(d *schema.ResourceData, meta interface{}) error {
 		_, err := conn.ModifySubnetAttribute(modifyOpts)
 
 		if err != nil {
+			log.Printf("[DEBUG] OLIVIER1 Subnet update: %v ModifySubnetAttribute Error: %s", d.Id(), err)
 			return err
 		} else {
 			d.SetPartial("assign_ipv6_address_on_creation")
@@ -310,16 +327,19 @@ func resourceAwsSubnetUpdate(d *schema.ResourceData, meta interface{}) error {
 	}
 
 	d.Partial(false)
+	log.Printf("[DEBUG] OLIVIER1 Subnet update: %v OK", d.Id())
 
 	return resourceAwsSubnetRead(d, meta)
 }
 
 func resourceAwsSubnetDelete(d *schema.ResourceData, meta interface{}) error {
+	log.Printf("[DEBUG] OLIVIER1 Subnet destroy ID: %v Timeout: %v", d.Id(), d.Timeout(schema.TimeoutDelete))
 	conn := meta.(*AWSClient).ec2conn
 
 	log.Printf("[INFO] Deleting subnet: %s", d.Id())
 
 	if err := deleteLingeringLambdaENIs(conn, d, "subnet-id"); err != nil {
+		log.Printf("[DEBUG] OLIVIER1 Subnet destroy ID: %v Failed to delete Lambda ENIs: %s", d.Id(), err)
 		return fmt.Errorf("Failed to delete Lambda ENIs: %s", err)
 	}
 
@@ -327,36 +347,50 @@ func resourceAwsSubnetDelete(d *schema.ResourceData, meta interface{}) error {
 		SubnetId: aws.String(d.Id()),
 	}
 
+	locTimeout := d.Timeout(schema.TimeoutDelete)
+	if int64(locTimeout) <= int64(20*time.Minute) {
+		locTimeout = *schema.DefaultTimeout(34 * time.Minute)
+		log.Printf("[DEBUG] OLIVIER1 FIX IN PROGRESS (3) resourceAwsSubnetDelete %s Timeout: %v / %v", d.Id(), locTimeout, d.Timeout(schema.TimeoutDelete))
+	}
+
 	wait := resource.StateChangeConf{
 		Pending:    []string{"pending"},
 		Target:     []string{"destroyed"},
-		Timeout:    d.Timeout(schema.TimeoutDelete),
+		Timeout:    locTimeout,
 		MinTimeout: 1 * time.Second,
 		Refresh: func() (interface{}, string, error) {
 			_, err := conn.DeleteSubnet(req)
 			if err != nil {
+				log.Printf("[DEBUG] OLIVIER1 Subnet destroy ID: %v StateChangeRefresh: %s", d.Id(), err)
 				if apiErr, ok := err.(awserr.Error); ok {
+					log.Printf("[DEBUG] OLIVIER1 Subnet destroy ID: %v StateChangeRefresh: AWS error %s", d.Id(), err)
 					if apiErr.Code() == "DependencyViolation" {
 						// There is some pending operation, so just retry
 						// in a bit.
+						log.Printf("[DEBUG] OLIVIER1 Subnet destroy ID: %v StateChangeRefresh: AWS error DependencyViolation %s", d.Id(), err)
 						return 42, "pending", nil
 					}
 
 					if apiErr.Code() == "InvalidSubnetID.NotFound" {
+						log.Printf("[DEBUG] OLIVIER1 Subnet destroy ID: %v StateChangeRefresh: AWS error InvalidSubnetID.NotFound %s", d.Id(), err)
 						return 42, "destroyed", nil
 					}
 				}
+				log.Printf("[DEBUG] OLIVIER1 Subnet destroy ID: %v StateChangeRefresh: AWS error OTHER1 %s", d.Id(), err)
 
 				return 42, "failure", err
 			}
+			log.Printf("[DEBUG] OLIVIER1 Subnet destroy ID: %v StateChangeRefresh: OK", d.Id())
 
 			return 42, "destroyed", nil
 		},
 	}
 
 	if _, err := wait.WaitForState(); err != nil {
+		log.Printf("[DEBUG] OLIVIER1 Subnet destroy ID: %v Error deleting subnets: %s", d.Id(), err)
 		return fmt.Errorf("Error deleting subnet: %s", err)
 	}
+	log.Printf("[DEBUG] OLIVIER1 Subnet destroy ID: %v OK", d.Id())
 
 	return nil
 }
@@ -364,14 +398,17 @@ func resourceAwsSubnetDelete(d *schema.ResourceData, meta interface{}) error {
 // SubnetStateRefreshFunc returns a resource.StateRefreshFunc that is used to watch a Subnet.
 func SubnetStateRefreshFunc(conn *ec2.EC2, id string) resource.StateRefreshFunc {
 	return func() (interface{}, string, error) {
+		log.Printf("[DEBUG] OLIVIER1 Subnet refresh ID: %v", id)
 		resp, err := conn.DescribeSubnets(&ec2.DescribeSubnetsInput{
 			SubnetIds: []*string{aws.String(id)},
 		})
 		if err != nil {
+			log.Printf("[DEBUG] OLIVIER1 Subnet refresh ID: %v Error %s", id, err)
 			if ec2err, ok := err.(awserr.Error); ok && ec2err.Code() == "InvalidSubnetID.NotFound" {
+				log.Printf("[DEBUG] OLIVIER1 Subnet refresh ID: %v Error InvalidSubnetID.NotFound %s", id, err)
 				resp = nil
 			} else {
-				log.Printf("Error on SubnetStateRefresh: %s", err)
+				log.Printf("[DEBUG] OLIVIER1 Subnet refresh ID: %v Error on SubnetStateRefresh: %s", id, err)
 				return nil, "", err
 			}
 		}
@@ -379,25 +416,30 @@ func SubnetStateRefreshFunc(conn *ec2.EC2, id string) resource.StateRefreshFunc 
 		if resp == nil {
 			// Sometimes AWS just has consistency issues and doesn't see
 			// our instance yet. Return an empty state.
+			log.Printf("[DEBUG] OLIVIER1 Subnet refresh ID: %v NIL", id)
 			return nil, "", nil
 		}
 
 		subnet := resp.Subnets[0]
+		log.Printf("[DEBUG] OLIVIER1 Subnet refresh ID: %v OK State:%s", id, *subnet.State)
 		return subnet, *subnet.State, nil
 	}
 }
 
 func SubnetIpv6CidrStateRefreshFunc(conn *ec2.EC2, id string, associationId string) resource.StateRefreshFunc {
 	return func() (interface{}, string, error) {
+		log.Printf("[DEBUG] OLIVIER1 Subnet refresh IPv6 CIDR ID: %v", id)
 		opts := &ec2.DescribeSubnetsInput{
 			SubnetIds: []*string{aws.String(id)},
 		}
 		resp, err := conn.DescribeSubnets(opts)
 		if err != nil {
+			log.Printf("[DEBUG] OLIVIER1 Subnet refresh IPv6 CIDR ID: %v Error %s", id, err)
 			if ec2err, ok := err.(awserr.Error); ok && ec2err.Code() == "InvalidSubnetID.NotFound" {
+				log.Printf("[DEBUG] OLIVIER1 Subnet refresh IPv6 CIDR ID: %v Error InvalidSubnetID.NotFound %s", id, err)
 				resp = nil
 			} else {
-				log.Printf("Error on SubnetIpv6CidrStateRefreshFunc: %s", err)
+				log.Printf("[DEBUG] OLIVIER1 Subnet refresh IPv6 CIDR ID: %v Error on SubnetIpv6CidrStateRefreshFunc: %s", id, err)
 				return nil, "", err
 			}
 		}
@@ -405,18 +447,22 @@ func SubnetIpv6CidrStateRefreshFunc(conn *ec2.EC2, id string, associationId stri
 		if resp == nil {
 			// Sometimes AWS just has consistency issues and doesn't see
 			// our instance yet. Return an empty state.
+			log.Printf("[DEBUG] OLIVIER1 Subnet refresh IPv6 CIDR ID: %v NIL 1", id)
 			return nil, "", nil
 		}
 
 		if resp.Subnets[0].Ipv6CidrBlockAssociationSet == nil {
+			log.Printf("[DEBUG] OLIVIER1 Subnet refresh IPv6 CIDR ID: %v NIL 2", id)
 			return nil, "", nil
 		}
 
 		for _, association := range resp.Subnets[0].Ipv6CidrBlockAssociationSet {
 			if *association.AssociationId == associationId {
+				log.Printf("[DEBUG] OLIVIER1 Subnet refresh IPv6 CIDR ID: %v Association %s", id, *association.Ipv6CidrBlockState.State)
 				return association, *association.Ipv6CidrBlockState.State, nil
 			}
 		}
+		log.Printf("[DEBUG] OLIVIER1 Subnet refresh IPv6 CIDR ID: %v OK NIL", id)
 
 		return nil, "", nil
 	}
