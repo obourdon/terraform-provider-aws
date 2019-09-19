@@ -273,13 +273,14 @@ func updateComputedAttributesOnPublish(d *schema.ResourceDiff, meta interface{})
 // resourceAwsLambdaFunction maps to:
 // CreateFunction in the API / SDK
 func resourceAwsLambdaFunctionCreate(d *schema.ResourceData, meta interface{}) error {
+	log.Printf("[DEBUG] OLIVIER0 Lambda create name: %v Timeout: %v", d.Get("function_name").(string), d.Timeout(schema.TimeoutDelete))
 	conn := meta.(*AWSClient).lambdaconn
 
 	functionName := d.Get("function_name").(string)
 	reservedConcurrentExecutions := d.Get("reserved_concurrent_executions").(int)
 	iamRole := d.Get("role").(string)
 
-	log.Printf("[DEBUG] Creating Lambda Function %s with role %s", functionName, iamRole)
+	log.Printf("[DEBUG] OLIVIER0 Creating Lambda Function %s with role %s", functionName, iamRole)
 
 	filename, hasFilename := d.GetOk("filename")
 	s3Bucket, bucketOk := d.GetOk("s3_bucket")
@@ -354,6 +355,7 @@ func resourceAwsLambdaFunctionCreate(d *schema.ResourceData, meta interface{}) e
 			SecurityGroupIds: expandStringSet(config["security_group_ids"].(*schema.Set)),
 			SubnetIds:        expandStringSet(config["subnet_ids"].(*schema.Set)),
 		}
+		log.Printf("[DEBUG] OLIVIER0 Creating Lambda Function %s VPC config %#v", functionName, params.VpcConfig)
 	}
 
 	if v, ok := d.GetOk("tracing_config"); ok {
@@ -390,63 +392,74 @@ func resourceAwsLambdaFunctionCreate(d *schema.ResourceData, meta interface{}) e
 
 	// IAM changes can take 1 minute to propagate in AWS
 	err := resource.Retry(1*time.Minute, func() *resource.RetryError {
+		log.Printf("[DEBUG] OLIVIER0 Creating Lambda Function %s CALL", functionName)
 		_, err := conn.CreateFunction(params)
 		if err != nil {
-			log.Printf("[DEBUG] Error creating Lambda Function: %s", err)
+			log.Printf("[DEBUG] OLIVIER0 Error creating Lambda Function %s: %s", functionName, err)
 
 			if isAWSErr(err, "InvalidParameterValueException", "The role defined for the function cannot be assumed by Lambda") {
-				log.Printf("[DEBUG] Received %s, retrying CreateFunction", err)
+				log.Printf("[DEBUG] OLIVIER0 creating Lambda Function %s: Received %s, retrying CreateFunction", functionName, err)
 				return resource.RetryableError(err)
 			}
 			if isAWSErr(err, "InvalidParameterValueException", "The provided execution role does not have permissions") {
-				log.Printf("[DEBUG] Received %s, retrying CreateFunction", err)
+				log.Printf("[DEBUG] OLIVIER0 creating Lambda Function %s: Received %s, retrying CreateFunction", functionName, err)
 				return resource.RetryableError(err)
 			}
 			if isAWSErr(err, "InvalidParameterValueException", "Your request has been throttled by EC2") {
-				log.Printf("[DEBUG] Received %s, retrying CreateFunction", err)
+				log.Printf("[DEBUG] OLIVIER0 creating Lambda Function %s: Received %s, retrying CreateFunction", functionName, err)
 				return resource.RetryableError(err)
 			}
 			if isAWSErr(err, "InvalidParameterValueException", "Lambda was unable to configure access to your environment variables because the KMS key is invalid for CreateGrant") {
-				log.Printf("[DEBUG] Received %s, retrying CreateFunction", err)
+				log.Printf("[DEBUG] OLIVIER0 creating Lambda Function %s: Received %s, retrying CreateFunction", functionName, err)
 				return resource.RetryableError(err)
 			}
+			log.Printf("[DEBUG] OLIVIER0 creating Lambda Function %s: Received %s, NOT retrying CreateFunction", functionName, err)
 
 			return resource.NonRetryableError(err)
 		}
+		log.Printf("[DEBUG] OLIVIER0 creating Lambda Function %s: OK", functionName)
 		return nil
 	})
 	if err != nil {
+		log.Printf("[DEBUG] OLIVIER0 Creating Lambda Function %s ERR %s", functionName, err)
 		if !isResourceTimeoutError(err) && !isAWSErr(err, "InvalidParameterValueException", "Your request has been throttled by EC2") {
+			log.Printf("[DEBUG] OLIVIER0 Error creating Lambda Function %s ERR %s", functionName, err)
 			return fmt.Errorf("Error creating Lambda function: %s", err)
 		}
 		// Allow additional time for slower uploads or EC2 throttling
 		err := resource.Retry(d.Timeout(schema.TimeoutCreate), func() *resource.RetryError {
+			log.Printf("[DEBUG] OLIVIER0 Creating Lambda Function SLOW %s", functionName)
 			_, err := conn.CreateFunction(params)
 			if err != nil {
-				log.Printf("[DEBUG] Error creating Lambda Function: %s", err)
+				log.Printf("[DEBUG] OLIVIER0 creating Lambda Function SLOW %s: Error creating Lambda Function: %s", functionName, err)
 
 				if isAWSErr(err, "InvalidParameterValueException", "Your request has been throttled by EC2") {
-					log.Printf("[DEBUG] Received %s, retrying CreateFunction", err)
+					log.Printf("[DEBUG] OLIVIER0 creating Lambda Function SLOW %s: Received %s, retrying CreateFunction", functionName, err)
 					return resource.RetryableError(err)
 				}
+				log.Printf("[DEBUG] OLIVIER0 creating Lambda Function SLOW %s: Received %s, NOT retrying", functionName, err)
 
 				return resource.NonRetryableError(err)
 			}
+			log.Printf("[DEBUG] OLIVIER0 creating Lambda Function SLOW %s: OK", functionName)
 			return nil
 		})
 		if isResourceTimeoutError(err) {
+			log.Printf("[DEBUG] OLIVIER0 Creating Lambda Function SLOW (ONE MORE) %s %s", functionName, err)
 			_, err = conn.CreateFunction(params)
 		}
 		if err != nil {
+			log.Printf("[DEBUG] OLIVIER0 Error creating Lambda Function SLOW (ONE MORE) %s ERR %s", functionName, err)
 			return fmt.Errorf("Error creating Lambda function: %s", err)
 		}
+		log.Printf("[DEBUG] OLIVIER0 creating Lambda Function SLOW (ONE MORE) %s: OK", functionName)
 	}
 
 	d.SetId(d.Get("function_name").(string))
 
 	if reservedConcurrentExecutions >= 0 {
 
-		log.Printf("[DEBUG] Setting Concurrency to %d for the Lambda Function %s", reservedConcurrentExecutions, functionName)
+		log.Printf("[DEBUG] OLIVIER0 Setting Concurrency to %d for the Lambda Function %s", reservedConcurrentExecutions, functionName)
 
 		concurrencyParams := &lambda.PutFunctionConcurrencyInput{
 			FunctionName:                 aws.String(functionName),
@@ -477,6 +490,7 @@ func resourceAwsLambdaFunctionCreate(d *schema.ResourceData, meta interface{}) e
 // resourceAwsLambdaFunctionRead maps to:
 // GetFunction in the API / SDK
 func resourceAwsLambdaFunctionRead(d *schema.ResourceData, meta interface{}) error {
+	log.Printf("[DEBUG] OLIVIER0 Lambda read name: %v Timeout: %v", d.Id(), d.Timeout(schema.TimeoutDelete))
 	conn := meta.(*AWSClient).lambdaconn
 
 	params := &lambda.GetFunctionInput{
@@ -627,6 +641,7 @@ func listVersionsByFunctionPages(c *lambda.Lambda, input *lambda.ListVersionsByF
 // resourceAwsLambdaFunction maps to:
 // DeleteFunction in the API / SDK
 func resourceAwsLambdaFunctionDelete(d *schema.ResourceData, meta interface{}) error {
+	log.Printf("[DEBUG] OLIVIER0 Lambda destroy ID: %v Timeout: %v", d.Id(), d.Timeout(schema.TimeoutDelete))
 	conn := meta.(*AWSClient).lambdaconn
 
 	log.Printf("[INFO] Deleting Lambda Function: %s", d.Id())
@@ -637,8 +652,10 @@ func resourceAwsLambdaFunctionDelete(d *schema.ResourceData, meta interface{}) e
 
 	_, err := conn.DeleteFunction(params)
 	if err != nil {
+		log.Printf("[DEBUG] OLIVIER0 Error deleting Lambda Function %s: %s", d.Id(), err)
 		return fmt.Errorf("Error deleting Lambda Function: %s", err)
 	}
+	log.Printf("[DEBUG] OLIVIER0 deleting Lambda Function %s: DONE", d.Id())
 
 	return nil
 }
@@ -654,6 +671,7 @@ func needsFunctionCodeUpdate(d resourceDiffer) bool {
 // resourceAwsLambdaFunctionUpdate maps to:
 // UpdateFunctionCode in the API / SDK
 func resourceAwsLambdaFunctionUpdate(d *schema.ResourceData, meta interface{}) error {
+	log.Printf("[DEBUG] OLIVIER0 Lambda update ID: %v Timeout: %v", d.Id(), d.Timeout(schema.TimeoutDelete))
 	conn := meta.(*AWSClient).lambdaconn
 
 	d.Partial(true)
@@ -729,6 +747,7 @@ func resourceAwsLambdaFunctionUpdate(d *schema.ResourceData, meta interface{}) e
 			configReq.VpcConfig.SecurityGroupIds = expandStringSet(vpcConfig["security_group_ids"].(*schema.Set))
 			configReq.VpcConfig.SubnetIds = expandStringSet(vpcConfig["subnet_ids"].(*schema.Set))
 		}
+		log.Printf("[DEBUG] OLIVIER0 Updating Lambda Function %s VPC config %#v", d.Id(), configReq.VpcConfig)
 		configUpdate = true
 	}
 
@@ -761,59 +780,70 @@ func resourceAwsLambdaFunctionUpdate(d *schema.ResourceData, meta interface{}) e
 	}
 
 	if configUpdate {
-		log.Printf("[DEBUG] Send Update Lambda Function Configuration request: %#v", configReq)
+		log.Printf("[DEBUG] OLIVIER0 Send Update Lambda Function Configuration request: %#v", configReq)
 
 		// IAM changes can take 1 minute to propagate in AWS
 		err := resource.Retry(1*time.Minute, func() *resource.RetryError {
+			log.Printf("[DEBUG] OLIVIER0 Updating Lambda Function %s CALL", d.Id())
 			_, err := conn.UpdateFunctionConfiguration(configReq)
 			if err != nil {
-				log.Printf("[DEBUG] Received error modifying Lambda Function Configuration %s: %s", d.Id(), err)
+				log.Printf("[DEBUG] OLIVIER0 Received error modifying Lambda Function Configuration %s: %s", d.Id(), err)
 
 				if isAWSErr(err, "InvalidParameterValueException", "The role defined for the function cannot be assumed by Lambda") {
-					log.Printf("[DEBUG] Received %s, retrying UpdateFunctionConfiguration", err)
+					log.Printf("[DEBUG] OLIVIER0 Received error modifying Lambda Function Configuration %s: Received %s, retrying UpdateFunctionConfiguration", d.Id(), err)
 					return resource.RetryableError(err)
 				}
 				if isAWSErr(err, "InvalidParameterValueException", "The provided execution role does not have permissions") {
-					log.Printf("[DEBUG] Received %s, retrying UpdateFunctionConfiguration", err)
+					log.Printf("[DEBUG] OLIVIER0 Received error modifying Lambda Function Configuration %s: Received %s, retrying UpdateFunctionConfiguration", d.Id(), err)
 					return resource.RetryableError(err)
 				}
 				if isAWSErr(err, "InvalidParameterValueException", "Your request has been throttled by EC2, please make sure you have enough API rate limit.") {
-					log.Printf("[DEBUG] Received %s, retrying UpdateFunctionConfiguration", err)
+					log.Printf("[DEBUG] OLIVIER0 Received error modifying Lambda Function Configuration %s: Received %s, retrying UpdateFunctionConfiguration", d.Id(), err)
 					return resource.RetryableError(err)
 				}
 				if isAWSErr(err, "InvalidParameterValueException", "Lambda was unable to configure access to your environment variables because the KMS key is invalid for CreateGrant") {
-					log.Printf("[DEBUG] Received %s, retrying CreateFunction", err)
+					log.Printf("[DEBUG] OLIVIER0 Received error modifying Lambda Function Configuration %s: Received %s, retrying CreateFunction", d.Id(), err)
 					return resource.RetryableError(err)
 				}
+				log.Printf("[DEBUG] OLIVIER0 Received error modifying Lambda Function Configuration %s: Received %s, NOT retrying CreateFunction", d.Id(), err)
 
 				return resource.NonRetryableError(err)
 			}
+			log.Printf("[DEBUG] OLIVIER0 Received error modifying Lambda Function Configuration %s: OK", d.Id())
 			return nil
 		})
 		if err != nil {
+			log.Printf("[DEBUG] OLIVIER0 Updating Lambda Function %s ERR %s", d.Id(), err)
 			if !isAWSErr(err, "InvalidParameterValueException", "Your request has been throttled by EC2, please make sure you have enough API rate limit.") {
+				log.Printf("[DEBUG] OLIVIER0 Error updating Lambda Function %s ERR %s", d.Id(), err)
 				return fmt.Errorf("Error modifying Lambda Function Configuration %s: %s", d.Id(), err)
 			}
 			// Allow 9 more minutes for EC2 throttling
 			err := resource.Retry(9*time.Minute, func() *resource.RetryError {
+				log.Printf("[DEBUG] OLIVIER0 Updating Lambda Function SLOW %s", d.Id())
 				_, err := conn.UpdateFunctionConfiguration(configReq)
 				if err != nil {
-					log.Printf("[DEBUG] Received error modifying Lambda Function Configuration %s: %s", d.Id(), err)
+					log.Printf("[DEBUG] OLIVIER0 updating Lambda Function SLOW %s: Received error modifying Lambda Function Configuration: %s", d.Id(), err)
 
 					if isAWSErr(err, "InvalidParameterValueException", "Your request has been throttled by EC2, please make sure you have enough API rate limit.") {
-						log.Printf("[DEBUG] Received %s, retrying UpdateFunctionConfiguration", err)
+						log.Printf("[DEBUG] OLIVIER0 updating Lambda Function SLOW %s: Received %s, retrying UpdateFunctionConfiguration", d.Id(), err)
 						return resource.RetryableError(err)
 					}
+					log.Printf("[DEBUG] OLIVIER0 updating Lambda Function SLOW %s: Received %s, NOT retrying", d.Id(), err)
 					return resource.NonRetryableError(err)
 				}
+				log.Printf("[DEBUG] OLIVIER0 updating Lambda Function SLOW %s: OK", d.Id())
 				return nil
 			})
 			if isResourceTimeoutError(err) {
+				log.Printf("[DEBUG] OLIVIER0 Updating Lambda Function SLOW (ONE MORE) %s %s", d.Id(), err)
 				_, err = conn.UpdateFunctionConfiguration(configReq)
 			}
 			if err != nil {
+				log.Printf("[DEBUG] OLIVIER0 Error updating Lambda Function SLOW (ONE MORE) %s ERR %s", d.Id(), err)
 				return fmt.Errorf("Error modifying Lambda Function Configuration %s: %s", d.Id(), err)
 			}
+			log.Printf("[DEBUG] OLIVIER0 updating Lambda Function SLOW (ONE MORE) %s: OK", d.Id())
 		}
 
 		d.SetPartial("description")
