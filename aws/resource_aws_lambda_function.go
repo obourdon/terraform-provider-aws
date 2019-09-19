@@ -48,6 +48,7 @@ func resourceAwsLambdaFunction() *schema.Resource {
 		Delete: resourceAwsLambdaFunctionDelete,
 		Timeouts: &schema.ResourceTimeout{
 			Create: schema.DefaultTimeout(10 * time.Minute),
+			Delete: schema.DefaultTimeout(31 * time.Minute),
 		},
 
 		Importer: &schema.ResourceImporter{
