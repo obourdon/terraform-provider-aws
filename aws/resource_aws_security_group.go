@@ -253,22 +253,24 @@ func resourceAwsSecurityGroupCreate(d *schema.ResourceData, meta interface{}) er
 		groupName = resource.UniqueId()
 	}
 	securityGroupOpts.GroupName = aws.String(groupName)
+	log.Printf("[DEBUG] OLIVIER2 Security Group create %s Timeout: %v", groupName, d.Timeout(schema.TimeoutDelete))
 
 	var err error
-	log.Printf(
-		"[DEBUG] Security Group create configuration: %#v", securityGroupOpts)
+	log.Printf("[DEBUG] Security Group create configuration: %#v", securityGroupOpts)
 	createResp, err := conn.CreateSecurityGroup(securityGroupOpts)
 	if err != nil {
+		log.Printf("[DEBUG] OLIVIER2 Security Group create %s Error: %s", groupName, err)
 		return fmt.Errorf("Error creating Security Group: %s", err)
 	}
 
 	d.SetId(*createResp.GroupId)
 
-	log.Printf("[INFO] Security Group ID: %s", d.Id())
+	log.Printf("[INFO] OLIVIER2 Security Group Name %s ID: %s Timeout: %v", groupName, d.Id(), d.Timeout(schema.TimeoutCreate))
 
 	// Wait for the security group to truly exist
 	resp, err := waitForSgToExist(conn, d.Id(), d.Timeout(schema.TimeoutCreate))
 	if err != nil {
+		log.Printf("[INFO] OLIVIER2 Security Group Name %s ID: %s Error waiting availability: %v", groupName, d.Id(), err)
 		return fmt.Errorf(
 			"Error waiting for Security Group (%s) to become available: %s",
 			d.Id(), err)
@@ -342,6 +344,8 @@ func resourceAwsSecurityGroupCreate(d *schema.ResourceData, meta interface{}) er
 func resourceAwsSecurityGroupRead(d *schema.ResourceData, meta interface{}) error {
 	conn := meta.(*AWSClient).ec2conn
 
+	log.Printf("[DEBUG] OLIVIER2 Security Group read %s Timeout: %v", d.Id(), d.Timeout(schema.TimeoutRead))
+
 	var sgRaw interface{}
 	var err error
 	if d.IsNewResource() {
@@ -402,6 +406,8 @@ func resourceAwsSecurityGroupRead(d *schema.ResourceData, meta interface{}) erro
 func resourceAwsSecurityGroupUpdate(d *schema.ResourceData, meta interface{}) error {
 	conn := meta.(*AWSClient).ec2conn
 
+	log.Printf("[DEBUG] OLIVIER2 Security Group update %s Timeout: %v", d.Id(), d.Timeout(schema.TimeoutRead))
+
 	var sgRaw interface{}
 	var err error
 	if d.IsNewResource() {
@@ -446,15 +452,20 @@ func resourceAwsSecurityGroupUpdate(d *schema.ResourceData, meta interface{}) er
 func resourceAwsSecurityGroupDelete(d *schema.ResourceData, meta interface{}) error {
 	conn := meta.(*AWSClient).ec2conn
 
-	log.Printf("[DEBUG] Security Group destroy: %v", d.Id())
+	log.Printf("[DEBUG] OLIVIER2 Security Group destroy ID: %v Timeout: %v", d.Id(), d.Timeout(schema.TimeoutDelete))
+	log.Printf("[DEBUG] OLIVIER2 Security Group destroy name: %#v", d.Get("name"))
+	log.Printf("[DEBUG] OLIVIER2 Security Group destroy description: %#v", d.Get("description"))
 
 	if err := deleteLingeringLambdaENIs(conn, d, "group-id"); err != nil {
+		log.Printf("[ERROR] OLIVIER2 Security Group destroy: %s (deleteLingeringLambdaENIs) %s", d.Id(), err)
 		return fmt.Errorf("Failed to delete Lambda ENIs: %s", err)
 	}
 
 	// conditionally revoke rules first before attempting to delete the group
 	if v := d.Get("revoke_rules_on_delete").(bool); v {
+		log.Printf("[DEBUG] OLIVIER2 Security Group destroy: %s (revoke_rules_on_delete)", d.Id())
 		if err := forceRevokeSecurityGroupRules(conn, d); err != nil {
+			log.Printf("[ERROR] OLIVIER2 Security Group destroy: %s (revoke_rules_on_delete) %s", d.Id(), err)
 			return err
 		}
 	}
@@ -462,28 +473,38 @@ func resourceAwsSecurityGroupDelete(d *schema.ResourceData, meta interface{}) er
 		GroupId: aws.String(d.Id()),
 	}
 	err := resource.Retry(d.Timeout(schema.TimeoutDelete), func() *resource.RetryError {
+		log.Printf("[INFO] OLIVIER2 Security Group destroy: %s (DeleteSecurityGroup)", d.Id())
 		_, err := conn.DeleteSecurityGroup(input)
 		if err != nil {
+			log.Printf("[ERROR] OLIVIER2 Security Group destroy: %s (DeleteSecurityGroup) %s", d.Id(), err)
 			if isAWSErr(err, "InvalidGroup.NotFound", "") {
+				log.Printf("[ERROR] OLIVIER2 Security Group destroy: %s (DeleteSecurityGroup, InvalidGroup.NotFound) %s", d.Id(), err)
 				return nil
 			}
 			if isAWSErr(err, "DependencyViolation", "") {
 				// If it is a dependency violation, we want to retry
+				log.Printf("[ERROR] OLIVIER2 Security Group destroy: %s (DeleteSecurityGroup, DependencyViolation) %s", d.Id(), err)
 				return resource.RetryableError(err)
 			}
+			log.Printf("[INFO] OLIVIER2 Security Group destroy: %s (DeleteSecurityGroup, NonRetryableError) %s", d.Id(), err)
 			return resource.NonRetryableError(err)
 		}
+		log.Printf("[INFO] OLIVIER2 Security Group destroy: %s (DeleteSecurityGroup) OK", d.Id())
 		return nil
 	})
 	if isResourceTimeoutError(err) {
+		log.Printf("[INFO] OLIVIER2 Security Group destroy: %s (isResourceTimeoutError) %s", d.Id(), err)
 		_, err = conn.DeleteSecurityGroup(input)
 		if isAWSErr(err, "InvalidGroup.NotFound", "") {
+			log.Printf("[INFO] OLIVIER2 Security Group destroy: %s (isResourceTimeoutError, NIL) %s", d.Id(), err)
 			return nil
 		}
 	}
 	if err != nil {
+		log.Printf("[ERROR] OLIVIER2 Security Group deleting: %s %s", d.Id(), err)
 		return fmt.Errorf("Error deleting security group: %s", err)
 	}
+	log.Printf("[ERROR] OLIVIER2 Security Group deleting: %s DONE", d.Id())
 	return nil
 }
 
@@ -792,36 +813,42 @@ func resourceAwsSecurityGroupUpdateRules(
 // a security group.
 func SGStateRefreshFunc(conn *ec2.EC2, id string) resource.StateRefreshFunc {
 	return func() (interface{}, string, error) {
+		log.Printf("[DEBUG] OLIVIER2 SGStateRefreshFunc %s", id)
 		req := &ec2.DescribeSecurityGroupsInput{
 			GroupIds: []*string{aws.String(id)},
 		}
 		resp, err := conn.DescribeSecurityGroups(req)
 		if err != nil {
+			log.Printf("[DEBUG] OLIVIER2 SGStateRefreshFunc %s Error: %s", id, err)
 			if ec2err, ok := err.(awserr.Error); ok {
+				log.Printf("[DEBUG] OLIVIER2 SGStateRefreshFunc %s AWS Error: %s", id, err)
 				if ec2err.Code() == "InvalidSecurityGroupID.NotFound" ||
 					ec2err.Code() == "InvalidGroup.NotFound" {
+					log.Printf("[DEBUG] OLIVIER2 SGStateRefreshFunc %s AWS Error Not Found: %s", id, err)
 					resp = nil
 					err = nil
 				}
 			}
 
 			if err != nil {
-				log.Printf("Error on SGStateRefresh: %s", err)
+				log.Printf("[DEBUG] OLIVIER2 SGStateRefreshFunc %s Final Error: %s", id, err)
 				return nil, "", err
 			}
 		}
 
 		if resp == nil {
+			log.Printf("[DEBUG] OLIVIER2 SGStateRefreshFunc %s NIL", id)
 			return nil, "", nil
 		}
 
 		group := resp.SecurityGroups[0]
+		log.Printf("[DEBUG] OLIVIER2 SGStateRefreshFunc %s OK\n%+v", id, group)
 		return group, "exists", nil
 	}
 }
 
 func waitForSgToExist(conn *ec2.EC2, id string, timeout time.Duration) (interface{}, error) {
-	log.Printf("[DEBUG] Waiting for Security Group (%s) to exist", id)
+	log.Printf("[DEBUG] OLIVIER2 Waiting for Security Group (%s) to exist %v", id, timeout)
 	stateConf := &resource.StateChangeConf{
 		Pending: []string{""},
 		Target:  []string{"exists"},
@@ -1403,6 +1430,7 @@ func sgProtocolIntegers() map[string]int {
 // The AWS Lambda service creates ENIs behind the scenes and keeps these around for a while
 // which would prevent SGs attached to such ENIs from being destroyed
 func deleteLingeringLambdaENIs(conn *ec2.EC2, d *schema.ResourceData, filterName string) error {
+	log.Printf("[DEBUG] OLIVIER2 deleteLingeringLambdaENIs %s=%v %v\n========================================\n", filterName, d.Id(), d.Timeout(schema.TimeoutDelete))
 	// Here we carefully find the offenders
 	params := &ec2.DescribeNetworkInterfacesInput{
 		Filters: []*ec2.Filter{
@@ -1416,19 +1444,24 @@ func deleteLingeringLambdaENIs(conn *ec2.EC2, d *schema.ResourceData, filterName
 			},
 		},
 	}
+	log.Printf("[DEBUG] OLIVIER2 deleteLingeringLambdaENIs %s=%v filter: %#v", filterName, d.Id(), params)
 	networkInterfaceResp, err := conn.DescribeNetworkInterfaces(params)
 
 	if isAWSErr(err, "InvalidNetworkInterfaceID.NotFound", "") {
+		log.Printf("[ERROR] OLIVIER2 deleteLingeringLambdaENIs %s=%v InvalidNetworkInterfaceID.NotFound %#v", filterName, d.Id(), err)
 		return nil
 	}
 
 	if err != nil {
+		log.Printf("[ERROR] OLIVIER2 deleteLingeringLambdaENIs %s=%v %#v", filterName, d.Id(), err)
 		return err
 	}
 
 	// Then we detach and finally delete those
 	v := networkInterfaceResp.NetworkInterfaces
+	log.Printf("[DEBUG] OLIVIER2 deleteLingeringLambdaENIs %s=%v found %d interfaces", filterName, d.Id(), len(v))
 	for _, eni := range v {
+		log.Printf("[DEBUG] OLIVIER2 deleteLingeringLambdaENIs %s=%v handling ITF %#v", filterName, d.Id(), eni)
 		if eni.Attachment != nil {
 			detachNetworkInterfaceParams := &ec2.DetachNetworkInterfaceInput{
 				AttachmentId: eni.Attachment.AttachmentId,
@@ -1436,14 +1469,16 @@ func deleteLingeringLambdaENIs(conn *ec2.EC2, d *schema.ResourceData, filterName
 			_, detachNetworkInterfaceErr := conn.DetachNetworkInterface(detachNetworkInterfaceParams)
 
 			if isAWSErr(detachNetworkInterfaceErr, "InvalidNetworkInterfaceID.NotFound", "") {
+				log.Printf("[DEBUG] OLIVIER2 deleteLingeringLambdaENIs %s=%v InvalidNetworkInterfaceID.NotFound 1", filterName, d.Id())
 				return nil
 			}
-
+			log.Printf("[DEBUG] OLIVIER2 deleteLingeringLambdaENIs %s=%v NOT Waiting for ENI (%s) to become available", filterName, d.Id(), *eni.NetworkInterfaceId)
 			if detachNetworkInterfaceErr != nil {
+				log.Printf("[ERROR] OLIVIER2 deleteLingeringLambdaENIs %s=%v detachNetworkInterfaceErr: %s", filterName, d.Id(), detachNetworkInterfaceErr)
 				return detachNetworkInterfaceErr
 			}
 
-			log.Printf("[DEBUG] Waiting for ENI (%s) to become detached", *eni.NetworkInterfaceId)
+			log.Printf("[DEBUG] OLIVIER2 deleteLingeringLambdaENIs %s=%v Waiting for ENI (%s) to become detached", filterName, d.Id(), *eni.NetworkInterfaceId)
 			stateConf := &resource.StateChangeConf{
 				Pending: []string{"true"},
 				Target:  []string{"false"},
@@ -1451,10 +1486,13 @@ func deleteLingeringLambdaENIs(conn *ec2.EC2, d *schema.ResourceData, filterName
 				Timeout: d.Timeout(schema.TimeoutDelete),
 			}
 			if _, err := stateConf.WaitForState(); err != nil {
+				log.Printf("[ERROR] OLIVIER2 deleteLingeringLambdaENIs %s=%v Error waiting for ENI (%s) to become detached: %s", filterName, d.Id(), *eni.NetworkInterfaceId, err)
 				return fmt.Errorf(
 					"Error waiting for ENI (%s) to become detached: %s", *eni.NetworkInterfaceId, err)
 			}
+			log.Printf("[DEBUG] OLIVIER2 deleteLingeringLambdaENIs %s=%v Error waiting for ENI (%s) to become detached OK", filterName, d.Id(), *eni.NetworkInterfaceId)
 		}
+		log.Printf("[DEBUG] OLIVIER2 deleteLingeringLambdaENIs %s=%v ENI (%s) CONT", filterName, d.Id(), *eni.NetworkInterfaceId)
 
 		deleteNetworkInterfaceParams := &ec2.DeleteNetworkInterfaceInput{
 			NetworkInterfaceId: eni.NetworkInterfaceId,
@@ -1462,13 +1500,17 @@ func deleteLingeringLambdaENIs(conn *ec2.EC2, d *schema.ResourceData, filterName
 		_, deleteNetworkInterfaceErr := conn.DeleteNetworkInterface(deleteNetworkInterfaceParams)
 
 		if isAWSErr(deleteNetworkInterfaceErr, "InvalidNetworkInterfaceID.NotFound", "") {
+			log.Printf("[DEBUG] OLIVIER2 deleteLingeringLambdaENIs %s=%v InvalidNetworkInterfaceID.NotFound 2", filterName, d.Id())
 			return nil
 		}
 
 		if deleteNetworkInterfaceErr != nil {
+			log.Printf("[DEBUG] OLIVIER2 deleteLingeringLambdaENIs %s=%v deleteNetworkInterfaceErr %s", filterName, d.Id(), deleteNetworkInterfaceErr)
 			return deleteNetworkInterfaceErr
 		}
+		log.Printf("[DEBUG] OLIVIER2 deleteLingeringLambdaENIs %s=%v ENI (%s) ALL DONE", filterName, d.Id(), *eni.NetworkInterfaceId)
 	}
+	log.Printf("[DEBUG] OLIVIER2 deleteLingeringLambdaENIs %s=%v ALL DONE", filterName, d.Id())
 
 	return nil
 }
@@ -1476,22 +1518,26 @@ func deleteLingeringLambdaENIs(conn *ec2.EC2, d *schema.ResourceData, filterName
 func networkInterfaceAttachedRefreshFunc(conn *ec2.EC2, id string) resource.StateRefreshFunc {
 	return func() (interface{}, string, error) {
 
+		log.Printf("[DEBUG] OLIVIER2 networkInterfaceAttachedRefreshFunc ENI %s", id)
 		describe_network_interfaces_request := &ec2.DescribeNetworkInterfacesInput{
 			NetworkInterfaceIds: []*string{aws.String(id)},
 		}
 		describeResp, err := conn.DescribeNetworkInterfaces(describe_network_interfaces_request)
 
 		if isAWSErr(err, "InvalidNetworkInterfaceID.NotFound", "") {
+			log.Printf("[ERROR] OLIVIER2 networkInterfaceAttachedRefreshFunc ENI attachment InvalidNetworkInterfaceID %s", err)
 			return 42, "false", nil
 		}
 
 		if err != nil {
+			log.Printf("[ERROR] OLIVIER2 networkInterfaceAttachedRefreshFunc ENI attachment %s", err)
 			return nil, "", err
 		}
 
+		log.Printf("[DEBUG] OLIVIER2 networkInterfaceAttachedRefreshFunc ENI %s has attachment state %#v", id, describeResp)
 		eni := describeResp.NetworkInterfaces[0]
 		hasAttachment := strconv.FormatBool(eni.Attachment != nil)
-		log.Printf("[DEBUG] ENI %s has attachment state %s", id, hasAttachment)
+		log.Printf("[DEBUG] OLIVIER2 networkInterfaceAttachedRefreshFunc ENI %s has attachment state %s", id, hasAttachment)
 		return eni, hasAttachment, nil
 	}
 }
