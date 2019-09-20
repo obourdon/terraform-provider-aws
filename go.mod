@@ -5,6 +5,7 @@ require (
 	github.com/beevik/etree v1.1.0
 	github.com/bflad/tfproviderlint v0.4.0
 	github.com/client9/misspell v0.3.4
+	github.com/davecgh/go-spew v1.1.1
 	github.com/golangci/go-tools v0.0.0-20190124090046-35a9f45a5db0 // indirect
 	github.com/golangci/golangci-lint v1.17.1
 	github.com/golangci/gosec v0.0.0-20180901114220-8afd9cbb6cfb // indirect

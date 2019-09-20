@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/arn"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/davecgh/go-spew/spew"
 	"github.com/hashicorp/terraform/helper/hashcode"
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/helper/schema"
@@ -31,7 +32,7 @@ func resourceAwsSecurityGroup() *schema.Resource {
 
 		Timeouts: &schema.ResourceTimeout{
 			Create: schema.DefaultTimeout(10 * time.Minute),
-			Delete: schema.DefaultTimeout(10 * time.Minute),
+			Delete: schema.DefaultTimeout(33 * time.Minute),
 		},
 
 		SchemaVersion: 1,
@@ -1431,6 +1432,14 @@ func sgProtocolIntegers() map[string]int {
 // which would prevent SGs attached to such ENIs from being destroyed
 func deleteLingeringLambdaENIs(conn *ec2.EC2, d *schema.ResourceData, filterName string) error {
 	log.Printf("[DEBUG] OLIVIER2 deleteLingeringLambdaENIs %s=%v %v\n========================================\n", filterName, d.Id(), d.Timeout(schema.TimeoutDelete))
+	params1 := &ec2.DescribeNetworkInterfacesInput{}
+	resp1, err := conn.DescribeNetworkInterfaces(params1)
+	if err != nil {
+		log.Printf("[ERROR] OLIVIER2 deleteLingeringLambdaENIs %s=%v (ALL) %#v", filterName, d.Id(), err)
+		return err
+	}
+	log.Printf("[DEBUG] OLIVIER2 deleteLingeringLambdaENIs %s=%v ALL found %v interfaces\n%v\n========================================\n", filterName, d.Id(), len(resp1.NetworkInterfaces), spew.Sdump(resp1))
+
 	// Here we carefully find the offenders
 	params := &ec2.DescribeNetworkInterfacesInput{
 		Filters: []*ec2.Filter{
@@ -1440,7 +1449,7 @@ func deleteLingeringLambdaENIs(conn *ec2.EC2, d *schema.ResourceData, filterName
 			},
 			{
 				Name:   aws.String("description"),
-				Values: []*string{aws.String("AWS Lambda VPC ENI: *")},
+				Values: []*string{aws.String("AWS Lambda VPC ENI*")},
 			},
 		},
 	}
@@ -1460,6 +1469,7 @@ func deleteLingeringLambdaENIs(conn *ec2.EC2, d *schema.ResourceData, filterName
 	// Then we detach and finally delete those
 	v := networkInterfaceResp.NetworkInterfaces
 	log.Printf("[DEBUG] OLIVIER2 deleteLingeringLambdaENIs %s=%v found %d interfaces", filterName, d.Id(), len(v))
+	//time.Sleep(5 * time.Second)
 	for _, eni := range v {
 		log.Printf("[DEBUG] OLIVIER2 deleteLingeringLambdaENIs %s=%v handling ITF %#v", filterName, d.Id(), eni)
 		if eni.Attachment != nil {
@@ -1470,27 +1480,78 @@ func deleteLingeringLambdaENIs(conn *ec2.EC2, d *schema.ResourceData, filterName
 
 			if isAWSErr(detachNetworkInterfaceErr, "InvalidNetworkInterfaceID.NotFound", "") {
 				log.Printf("[DEBUG] OLIVIER2 deleteLingeringLambdaENIs %s=%v InvalidNetworkInterfaceID.NotFound 1", filterName, d.Id())
+				// OLIVIER why not continue on remaining ENIs
 				return nil
 			}
-			log.Printf("[DEBUG] OLIVIER2 deleteLingeringLambdaENIs %s=%v NOT Waiting for ENI (%s) to become available", filterName, d.Id(), *eni.NetworkInterfaceId)
-			if detachNetworkInterfaceErr != nil {
-				log.Printf("[ERROR] OLIVIER2 deleteLingeringLambdaENIs %s=%v detachNetworkInterfaceErr: %s", filterName, d.Id(), detachNetworkInterfaceErr)
-				return detachNetworkInterfaceErr
-			}
+			if isAWSErr(detachNetworkInterfaceErr, "OperationNotPermitted", "You are not allowed to manage 'ela-attach' attachments") ||
+				isAWSErr(detachNetworkInterfaceErr, "InvalidParameterValue", " is currently in use") {
+				log.Printf("[DEBUG] OLIVIER2 FIX IN PROGRESS deleteLingeringLambdaENIs %s=%v Waiting for ENI (%s) to become available %s", filterName, d.Id(), *eni.NetworkInterfaceId, detachNetworkInterfaceErr)
+				locTimeout := d.Timeout(schema.TimeoutDelete)
+				if int64(locTimeout) <= int64(20*time.Minute) {
+					locTimeout = *schema.DefaultTimeout(35 * time.Minute)
+					log.Printf("[DEBUG] OLIVIER2 FIX IN PROGRESS (3) deleteLingeringLambdaENIs %s=%v Timeout: %v / %v", filterName, d.Id(), locTimeout, d.Timeout(schema.TimeoutDelete))
+				}
+				log.Printf("[DEBUG] OLIVIER2 deleteLingeringLambdaENIs %s=%v Waiting for ENI (%s) to become available", filterName, d.Id(), *eni.NetworkInterfaceId)
+				stateConf := &resource.StateChangeConf{
+					Pending: []string{"false"},
+					Target:  []string{"true"},
+					Refresh: networkInterfaceAvailableRefreshFunc(conn, *eni.NetworkInterfaceId),
+					Timeout: locTimeout,
+				}
+				if _, err := stateConf.WaitForState(); err != nil {
+					log.Printf("[ERROR] OLIVIER2 deleteLingeringLambdaENIs %s=%v Error waiting for ENI (%s) to become available: %s", filterName, d.Id(), *eni.NetworkInterfaceId, err)
+					if err.Error() == "Improper number of interfaces returned: 0" {
+						log.Printf("[ERROR] OLIVIER2 deleteLingeringLambdaENIs %s=%v ENI (%s) available disapeared: %s", filterName, d.Id(), *eni.NetworkInterfaceId, err)
+						return nil
+					}
+					log.Printf("[ERROR] OLIVIER2 deleteLingeringLambdaENIs %s=%v Error waiting for ENI (%s) to become available: %s", filterName, d.Id(), *eni.NetworkInterfaceId, err)
+					return fmt.Errorf(
+						"Error waiting for ENI (%s) to become available: %s", *eni.NetworkInterfaceId, err)
+				}
+				log.Printf("[DEBUG] OLIVIER2 deleteLingeringLambdaENIs %s=%v Error waiting for ENI (%s) to become available OK", filterName, d.Id(), *eni.NetworkInterfaceId)
+			} else {
+				log.Printf("[DEBUG] OLIVIER2 deleteLingeringLambdaENIs %s=%v NOT Waiting for ENI (%s) to become available", filterName, d.Id(), *eni.NetworkInterfaceId)
+				if detachNetworkInterfaceErr != nil {
+					log.Printf("[ERROR] OLIVIER2 deleteLingeringLambdaENIs %s=%v detachNetworkInterfaceErr: %s", filterName, d.Id(), detachNetworkInterfaceErr)
+					return detachNetworkInterfaceErr
+				}
 
-			log.Printf("[DEBUG] OLIVIER2 deleteLingeringLambdaENIs %s=%v Waiting for ENI (%s) to become detached", filterName, d.Id(), *eni.NetworkInterfaceId)
+				log.Printf("[DEBUG] OLIVIER2 deleteLingeringLambdaENIs %s=%v Waiting for ENI (%s) to become detached", filterName, d.Id(), *eni.NetworkInterfaceId)
+				stateConf := &resource.StateChangeConf{
+					Pending: []string{"true"},
+					Target:  []string{"false"},
+					Refresh: networkInterfaceAttachedRefreshFunc(conn, *eni.NetworkInterfaceId),
+					Timeout: d.Timeout(schema.TimeoutDelete),
+				}
+				if _, err := stateConf.WaitForState(); err != nil {
+					log.Printf("[ERROR] OLIVIER2 deleteLingeringLambdaENIs %s=%v Error waiting for ENI (%s) to become detached: %s", filterName, d.Id(), *eni.NetworkInterfaceId, err)
+					if err.Error() == "Improper number of interfaces returned: 0" {
+						log.Printf("[ERROR] OLIVIER2 deleteLingeringLambdaENIs %s=%v Error waiting for ENI (%s) detached disapeared: %s", filterName, d.Id(), *eni.NetworkInterfaceId, err)
+						return nil
+					}
+					log.Printf("[ERROR] OLIVIER2 deleteLingeringLambdaENIs %s=%v Error waiting for ENI (%s) to become detached: %s", filterName, d.Id(), *eni.NetworkInterfaceId, err)
+					return fmt.Errorf(
+						"Error waiting for ENI (%s) to become detached: %s", *eni.NetworkInterfaceId, err)
+				}
+				log.Printf("[DEBUG] OLIVIER2 deleteLingeringLambdaENIs %s=%v Error waiting for ENI (%s) to become detached OK", filterName, d.Id(), *eni.NetworkInterfaceId)
+			}
+			log.Printf("[DEBUG] OLIVIER2 deleteLingeringLambdaENIs %s=%v Attachment for ENI (%s) OK", filterName, d.Id(), *eni.NetworkInterfaceId)
+		} else {
+			log.Printf("[DEBUG] OLIVIER2 deleteLingeringLambdaENIs %s=%v NO Attachment for ENI (%s) ELSE %s", filterName, d.Id(), *eni.NetworkInterfaceId, *eni.Status)
 			stateConf := &resource.StateChangeConf{
-				Pending: []string{"true"},
-				Target:  []string{"false"},
-				Refresh: networkInterfaceAttachedRefreshFunc(conn, *eni.NetworkInterfaceId),
-				Timeout: d.Timeout(schema.TimeoutDelete),
+				Pending:                   []string{},
+				Target:                    []string{"available", "in-use"},
+				Refresh:                   networkInterfaceStateRefreshFunc(conn, *eni.NetworkInterfaceId),
+				Delay:                     *schema.DefaultTimeout(10 * time.Second),
+				ContinuousTargetOccurence: 4,
+				Timeout:                   *schema.DefaultTimeout(90 * time.Second),
 			}
 			if _, err := stateConf.WaitForState(); err != nil {
-				log.Printf("[ERROR] OLIVIER2 deleteLingeringLambdaENIs %s=%v Error waiting for ENI (%s) to become detached: %s", filterName, d.Id(), *eni.NetworkInterfaceId, err)
+				log.Printf("[ERROR] OLIVIER2 deleteLingeringLambdaENIs %s=%v Error waiting for ENI (%s) to become stabilized: %s", filterName, d.Id(), *eni.NetworkInterfaceId, err)
 				return fmt.Errorf(
-					"Error waiting for ENI (%s) to become detached: %s", *eni.NetworkInterfaceId, err)
+					"Error waiting for ENI (%s) to become stabilized: %s", *eni.NetworkInterfaceId, err)
 			}
-			log.Printf("[DEBUG] OLIVIER2 deleteLingeringLambdaENIs %s=%v Error waiting for ENI (%s) to become detached OK", filterName, d.Id(), *eni.NetworkInterfaceId)
+			log.Printf("[DEBUG] OLIVIER2 deleteLingeringLambdaENIs %s=%v Error waiting for ENI (%s) to become stabilized OK", filterName, d.Id(), *eni.NetworkInterfaceId)
 		}
 		log.Printf("[DEBUG] OLIVIER2 deleteLingeringLambdaENIs %s=%v ENI (%s) CONT", filterName, d.Id(), *eni.NetworkInterfaceId)
 
@@ -1513,6 +1574,91 @@ func deleteLingeringLambdaENIs(conn *ec2.EC2, d *schema.ResourceData, filterName
 	log.Printf("[DEBUG] OLIVIER2 deleteLingeringLambdaENIs %s=%v ALL DONE", filterName, d.Id())
 
 	return nil
+}
+
+func networkInterfaceStateRefreshFunc(conn *ec2.EC2, id string) resource.StateRefreshFunc {
+	return func() (interface{}, string, error) {
+
+		itfParams := &ec2.DescribeNetworkInterfacesInput{
+			Filters: []*ec2.Filter{
+				{
+					Name:   aws.String("description"),
+					Values: []*string{aws.String("AWS Lambda VPC ENI*")},
+				},
+				{
+					Name:   aws.String("network-interface-id"),
+					Values: []*string{aws.String(id)},
+				},
+			},
+		}
+		log.Printf("[DEBUG] OLIVIER2 networkInterfaceStateRefreshFunc ENI %s\n%v", id, itfParams)
+		networkInterfaceResp, err := conn.DescribeNetworkInterfaces(itfParams)
+
+		if isAWSErr(err, "InvalidNetworkInterfaceID.NotFound", "") {
+			log.Printf("[ERROR] OLIVIER2 networkInterfaceStateRefreshFunc InvalidNetworkInterfaceID.NotFound %#v", err)
+			return nil, "", err
+		}
+
+		if err != nil {
+			log.Printf("[ERROR] OLIVIER2 networkInterfaceStateRefreshFunc %#v", err)
+			return nil, "", err
+		}
+
+		// Then we detach and finally delete those
+		v := networkInterfaceResp.NetworkInterfaces
+		if len(v) != 1 {
+			log.Printf("[ERROR] OLIVIER2 networkInterfaceStateRefreshFunc Improper number of interfaces returned: %d", len(v))
+			return nil, "", fmt.Errorf("Improper number of interfaces returned: %d", len(v))
+		}
+		log.Printf("[DEBUG] OLIVIER2 networkInterfaceStateRefreshFunc found %d interfaces %T\n%#v", len(v), v, v)
+		eni := v[0]
+		log.Printf("[DEBUG] OLIVIER2 networkInterfaceStateRefreshFunc ENI %s eni %T\n%#v", id, eni, eni)
+		log.Printf("[DEBUG] OLIVIER2 networkInterfaceStateRefreshFunc ENI %s state is %v", id, *eni.Status)
+		return eni, *eni.Status, nil
+	}
+}
+
+func networkInterfaceAvailableRefreshFunc(conn *ec2.EC2, id string) resource.StateRefreshFunc {
+	return func() (interface{}, string, error) {
+
+		itfParams := &ec2.DescribeNetworkInterfacesInput{
+			Filters: []*ec2.Filter{
+				{
+					Name:   aws.String("description"),
+					Values: []*string{aws.String("AWS Lambda VPC ENI*")},
+				},
+				{
+					Name:   aws.String("network-interface-id"),
+					Values: []*string{aws.String(id)},
+				},
+			},
+		}
+		log.Printf("[DEBUG] OLIVIER2 networkInterfaceAvailableRefreshFunc ENI %s\n%v", id, itfParams)
+		networkInterfaceResp, err := conn.DescribeNetworkInterfaces(itfParams)
+
+		if isAWSErr(err, "InvalidNetworkInterfaceID.NotFound", "") {
+			log.Printf("[ERROR] OLIVIER2 networkInterfaceAvailableRefreshFunc InvalidNetworkInterfaceID.NotFound %#v", err)
+			return nil, "", err
+		}
+
+		if err != nil {
+			log.Printf("[ERROR] OLIVIER2 networkInterfaceAvailableRefreshFunc %#v", err)
+			return nil, "", err
+		}
+
+		// Then we detach and finally delete those
+		v := networkInterfaceResp.NetworkInterfaces
+		if len(v) != 1 {
+			log.Printf("[ERROR] OLIVIER2 networkInterfaceAvailableRefreshFunc Improper number of interfaces returned: %d", len(v))
+			return nil, "", fmt.Errorf("Improper number of interfaces returned: %d", len(v))
+		}
+		log.Printf("[DEBUG] OLIVIER2 networkInterfaceAvailableRefreshFunc found %d interfaces %T\n%#v", len(v), v, v)
+		eni := v[0]
+		log.Printf("[DEBUG] OLIVIER2 networkInterfaceAvailableRefreshFunc ENI %s eni %T\n%#v", id, eni, eni)
+		isAvailable := strconv.FormatBool(*eni.Status == "available")
+		log.Printf("[DEBUG] OLIVIER2 networkInterfaceAvailableRefreshFunc ENI %s is available %v %v", id, *eni.Status, isAvailable)
+		return eni, isAvailable, nil
+	}
 }
 
 func networkInterfaceAttachedRefreshFunc(conn *ec2.EC2, id string) resource.StateRefreshFunc {
