@@ -40,13 +40,15 @@ func resourceAwsPlacementGroupCreate(d *schema.ResourceData, meta interface{}) e
 	conn := meta.(*AWSClient).ec2conn
 
 	name := d.Get("name").(string)
+	log.Printf("[INFO] OLIVIER1 Creating EC2 Placement group: %s (step 1)", name)
 	input := ec2.CreatePlacementGroupInput{
 		GroupName: aws.String(name),
 		Strategy:  aws.String(d.Get("strategy").(string)),
 	}
-	log.Printf("[DEBUG] Creating EC2 Placement group: %s", input)
+	log.Printf("[INFO] OLIVIER1 Creating EC2 Placement group: %s (step 2)", input)
 	_, err := conn.CreatePlacementGroup(&input)
 	if err != nil {
+		log.Printf("[INFO] OLIVIER1 Error creating EC2 Placement group: %s %v", input, err)
 		return err
 	}
 
@@ -61,13 +63,16 @@ func resourceAwsPlacementGroupCreate(d *schema.ResourceData, meta interface{}) e
 			})
 
 			if err != nil {
+				log.Printf("[INFO] OLIVIER1 Error describe EC2 Placement group: %q %v", name, err)
 				return out, "", err
 			}
 
 			if len(out.PlacementGroups) == 0 {
+				log.Printf("[INFO] OLIVIER1 Error EC2 Placement group not found: %q", name)
 				return out, "", fmt.Errorf("Placement group not found (%q)", name)
 			}
 			pg := out.PlacementGroups[0]
+			log.Printf("[INFO] OLIVIER1 Status creating EC2 Placement group: %q %v", name, *pg.State)
 
 			return out, *pg.State, nil
 		},
@@ -75,10 +80,11 @@ func resourceAwsPlacementGroupCreate(d *schema.ResourceData, meta interface{}) e
 
 	_, err = wait.WaitForState()
 	if err != nil {
+		log.Printf("[INFO] OLIVIER1 Error waiting EC2 Placement group state: %s %v", input, err)
 		return err
 	}
 
-	log.Printf("[DEBUG] EC2 Placement group created: %q", name)
+	log.Printf("[INFO] OLIVIER1 EC2 Placement group created: %q", name)
 
 	d.SetId(name)
 
@@ -86,6 +92,7 @@ func resourceAwsPlacementGroupCreate(d *schema.ResourceData, meta interface{}) e
 }
 
 func resourceAwsPlacementGroupRead(d *schema.ResourceData, meta interface{}) error {
+	log.Printf("[INFO] OLIVIER1 Reading EC2 Placement Group: %s", d.Id())
 	conn := meta.(*AWSClient).ec2conn
 	input := ec2.DescribePlacementGroupsInput{
 		GroupNames: []*string{aws.String(d.Id())},
@@ -96,7 +103,7 @@ func resourceAwsPlacementGroupRead(d *schema.ResourceData, meta interface{}) err
 	}
 	pg := out.PlacementGroups[0]
 
-	log.Printf("[DEBUG] Received EC2 Placement Group: %s", pg)
+	log.Printf("[INFO] OLIVIER1 Received EC2 Placement Group: %s", pg)
 
 	d.Set("name", pg.GroupName)
 	d.Set("strategy", pg.Strategy)
@@ -107,11 +114,12 @@ func resourceAwsPlacementGroupRead(d *schema.ResourceData, meta interface{}) err
 func resourceAwsPlacementGroupDelete(d *schema.ResourceData, meta interface{}) error {
 	conn := meta.(*AWSClient).ec2conn
 
-	log.Printf("[DEBUG] Deleting EC2 Placement Group %q", d.Id())
+	log.Printf("[INFO] OLIVIER1 Deleting EC2 Placement Group %q", d.Id())
 	_, err := conn.DeletePlacementGroup(&ec2.DeletePlacementGroupInput{
 		GroupName: aws.String(d.Id()),
 	})
 	if err != nil {
+		log.Printf("[INFO] OLIVIER1 Error deleting EC2 Placement group: %q %v", d.Id(), err)
 		return err
 	}
 
@@ -128,21 +136,26 @@ func resourceAwsPlacementGroupDelete(d *schema.ResourceData, meta interface{}) e
 			if err != nil {
 				awsErr := err.(awserr.Error)
 				if awsErr.Code() == "InvalidPlacementGroup.Unknown" {
+					log.Printf("[INFO] OLIVIER1 Resetting error deleting EC2 Placement group: %q %v", d.Id(), awsErr)
 					return out, "deleted", nil
 				}
+				log.Printf("[INFO] OLIVIER1 Error waiting deleting EC2 Placement group: %q %v", d.Id(), awsErr)
 				return out, "", awsErr
 			}
 
 			if len(out.PlacementGroups) == 0 {
+				log.Printf("[INFO] OLIVIER1 Not found deleting EC2 Placement group: %q", d.Id())
 				return out, "deleted", nil
 			}
 
 			pg := out.PlacementGroups[0]
+			log.Printf("[INFO] OLIVIER1 Status deleting EC2 Placement group: %q %v", d.Id(), *pg.State)
 
 			return out, *pg.State, nil
 		},
 	}
 
 	_, err = wait.WaitForState()
+	log.Printf("[INFO] OLIVIER1 deleting EC2 Placement group: %q returned %v", d.Id(), err)
 	return err
 }
