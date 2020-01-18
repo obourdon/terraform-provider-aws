@@ -124,7 +124,7 @@ func resourceAwsPlacementGroupDelete(d *schema.ResourceData, meta interface{}) e
 	}
 
 	wait := resource.StateChangeConf{
-		Pending:    []string{"deleting"},
+		Pending:    []string{"available", "deleting"},
 		Target:     []string{"deleted"},
 		Timeout:    5 * time.Minute,
 		MinTimeout: 1 * time.Second,
