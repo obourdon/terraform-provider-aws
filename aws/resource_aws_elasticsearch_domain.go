@@ -1,6 +1,7 @@
 package aws
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"regexp"
@@ -487,6 +488,14 @@ func resourceAwsElasticSearchDomainCreate(d *schema.ResourceData, meta interface
 				isAWSErr(err, "ValidationException", "Before you can proceed, you must enable a service-linked role to give Amazon ES permissions to access your VPC") {
 				log.Printf("[INFO] OLIVIER2 Retrying creation of ElasticSearch domain %s", aws.StringValue(input.DomainName))
 				return resource.RetryableError(err)
+			}
+			// New transient AWS error
+			var awsErr awserr.Error
+			if errors.As(err, &awsErr) {
+				if awsErr.Code() == "ValidationException" && len(awsErr.Message()) == 0 {
+					log.Printf("[INFO] OLIVIER2 Empty ValidationException ElasticSearch domain %s", aws.StringValue(input.DomainName))
+					return resource.RetryableError(err)
+				}
 			}
 			log.Printf("[INFO] OLIVIER2 Error-no-retry creating ElasticSearch domain %s", aws.StringValue(input.DomainName))
 
