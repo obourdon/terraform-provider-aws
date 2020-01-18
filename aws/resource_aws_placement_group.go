@@ -63,10 +63,13 @@ func resourceAwsPlacementGroupCreate(d *schema.ResourceData, meta interface{}) e
 			})
 
 			if err != nil {
-				// TODO: if isAWSErr(err, "InvalidPlacementGroup.Unknown", "The Placement Group") &&
-				// isAWSErr(err, "InvalidPlacementGroup.Unknown", "is unknown")
-				// LOG
-				// return out, "pending", nil
+				// Fix timing issue where describe is called prior to
+				// create being effectively processed by AWS
+				awsErr := err.(awserr.Error)
+				if awsErr.Code() == "InvalidPlacementGroup.Unknown" {
+					log.Printf("[INFO] OLIVIER1 FIX_OK_2 Resetting error creating EC2 Placement group: %q %v", d.Id(), awsErr)
+					return out, "pending", nil
+				}
 				log.Printf("[INFO] OLIVIER1 Error describe EC2 Placement group: %q %v", name, err)
 				return out, "", err
 			}
