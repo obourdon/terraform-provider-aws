@@ -339,6 +339,7 @@ func resourceAwsElasticSearchDomainImport(
 func resourceAwsElasticSearchDomainCreate(d *schema.ResourceData, meta interface{}) error {
 	conn := meta.(*AWSClient).esconn
 
+	log.Printf("[INFO] OLIVIER2 Creating ElasticSearch domain %s", d.Get("domain_name"))
 	// The API doesn't check for duplicate names
 	// so w/out this check Create would act as upsert
 	// and might cause duplicate domain to appear in state
@@ -449,38 +450,57 @@ func resourceAwsElasticSearchDomainCreate(d *schema.ResourceData, meta interface
 	}
 
 	log.Printf("[DEBUG] Creating ElasticSearch domain: %s", input)
+	log.Printf("[INFO] OLIVIER2 Creating ElasticSearch domain: %s (retry)", input)
 
 	// IAM Roles can take some time to propagate if set in AccessPolicies and created in the same terraform
 	var out *elasticsearch.CreateElasticsearchDomainOutput
 	err = resource.Retry(30*time.Second, func() *resource.RetryError {
 		var err error
+		log.Printf("[INFO] OLIVIER2 Call for creation of ElasticSearch domain %s", aws.StringValue(input.DomainName))
 		out, err = conn.CreateElasticsearchDomain(&input)
 		if err != nil {
+			log.Printf("[INFO] OLIVIER2 Error creating ElasticSearch domain %s: %v", aws.StringValue(input.DomainName), err)
 			if isAWSErr(err, "InvalidTypeException", "Error setting policy") {
+				log.Printf("[INFO] OLIVIER2 Error1 creating ElasticSearch domain %s", aws.StringValue(input.DomainName))
 				log.Printf("[DEBUG] Retrying creation of ElasticSearch domain %s", aws.StringValue(input.DomainName))
 				return resource.RetryableError(err)
 			}
 			if isAWSErr(err, "ValidationException", "enable a service-linked role to give Amazon ES permissions") {
+				log.Printf("[INFO] OLIVIER2 Error2 creating ElasticSearch domain %s", aws.StringValue(input.DomainName))
 				return resource.RetryableError(err)
 			}
 			if isAWSErr(err, "ValidationException", "Domain is still being deleted") {
+				log.Printf("[INFO] OLIVIER2 Error3 creating ElasticSearch domain %s", aws.StringValue(input.DomainName))
 				return resource.RetryableError(err)
 			}
 			if isAWSErr(err, "ValidationException", "Amazon Elasticsearch must be allowed to use the passed role") {
+				log.Printf("[INFO] OLIVIER2 Error4 creating ElasticSearch domain %s", aws.StringValue(input.DomainName))
 				return resource.RetryableError(err)
 			}
 			if isAWSErr(err, "ValidationException", "The passed role has not propagated yet") {
+				log.Printf("[INFO] OLIVIER2 Error5 creating ElasticSearch domain %s", aws.StringValue(input.DomainName))
 				return resource.RetryableError(err)
 			}
+			if isAWSErr(err, "ValidationException", "Authentication error") ||
+				isAWSErr(err, "ValidationException", "Unauthorized Operation: Elasticsearch must be authorised to describeVpcs") ||
+				isAWSErr(err, "ValidationException", "Unauthorized Operation: Elasticsearch must be authorised to describeSubnets") ||
+				isAWSErr(err, "ValidationException", "Before you can proceed, you must enable a service-linked role to give Amazon ES permissions to access your VPC") {
+				log.Printf("[INFO] OLIVIER2 Retrying creation of ElasticSearch domain %s", aws.StringValue(input.DomainName))
+				return resource.RetryableError(err)
+			}
+			log.Printf("[INFO] OLIVIER2 Error-no-retry creating ElasticSearch domain %s", aws.StringValue(input.DomainName))
 
 			return resource.NonRetryableError(err)
 		}
+		log.Printf("[INFO] OLIVIER2 Creating ElasticSearch domain %s OK", aws.StringValue(input.DomainName))
 		return nil
 	})
 	if isResourceTimeoutError(err) {
+		log.Printf("[INFO] OLIVIER2 Creating ElasticSearch domain %s AGAIN", aws.StringValue(input.DomainName))
 		out, err = conn.CreateElasticsearchDomain(&input)
 	}
 	if err != nil {
+		log.Printf("[INFO] OLIVIER2 Error creating ElasticSearch domain %s AGAIN: %v", aws.StringValue(input.DomainName), err)
 		return fmt.Errorf("Error creating ElasticSearch domain: %s", err)
 	}
 
@@ -499,10 +519,12 @@ func resourceAwsElasticSearchDomainCreate(d *schema.ResourceData, meta interface
 	log.Printf("[DEBUG] Waiting for ElasticSearch domain %q to be created", d.Id())
 	err = waitForElasticSearchDomainCreation(conn, d.Get("domain_name").(string), d.Id())
 	if err != nil {
+		log.Printf("[INFO] OLIVIER2 Error creating ElasticSearch domain %s WAIT: %v", aws.StringValue(input.DomainName), err)
 		return err
 	}
 
 	log.Printf("[DEBUG] ElasticSearch domain %q created", d.Id())
+	log.Printf("[INFO] OLIVIER2 ElasticSearch domain %q created", d.Id())
 
 	return resourceAwsElasticSearchDomainRead(d, meta)
 }
@@ -511,33 +533,42 @@ func waitForElasticSearchDomainCreation(conn *elasticsearch.ElasticsearchService
 	input := &elasticsearch.DescribeElasticsearchDomainInput{
 		DomainName: aws.String(domainName),
 	}
+	log.Printf("[INFO] OLIVIER2 Waiting creation of ElasticSearch domain %s", domainName)
 	var out *elasticsearch.DescribeElasticsearchDomainOutput
 	err := resource.Retry(60*time.Minute, func() *resource.RetryError {
 		var err error
 		out, err = conn.DescribeElasticsearchDomain(input)
 		if err != nil {
+			log.Printf("[INFO] OLIVIER2 Error waiting ElasticSearch domain %s (not retryable): %v", domainName, err)
 			return resource.NonRetryableError(err)
 		}
 
 		if !*out.DomainStatus.Processing && (out.DomainStatus.Endpoint != nil || out.DomainStatus.Endpoints != nil) {
+			log.Printf("[INFO] OLIVIER2 OK NIL retry waiting ElasticSearch domain %s", domainName)
 			return nil
 		}
 
+		log.Printf("[INFO] OLIVIER2 Timeout error waiting ElasticSearch domain %s (retryable)", domainName)
 		return resource.RetryableError(
 			fmt.Errorf("%q: Timeout while waiting for the domain to be created", arn))
 	})
 	if isResourceTimeoutError(err) {
+		log.Printf("[INFO] OLIVIER2 Retry on timeout ElasticSearch domain %s: %v", domainName, err)
 		out, err = conn.DescribeElasticsearchDomain(input)
 		if err != nil {
+			log.Printf("[INFO] OLIVIER2 Retry failed on timeout ElasticSearch domain %s: %v", domainName, err)
 			return fmt.Errorf("Error describing ElasticSearch domain: %s", err)
 		}
 		if !*out.DomainStatus.Processing && (out.DomainStatus.Endpoint != nil || out.DomainStatus.Endpoints != nil) {
+			log.Printf("[INFO] OLIVIER2 OK NIL retry timeout waiting ElasticSearch domain %s", domainName)
 			return nil
 		}
 	}
 	if err != nil {
+		log.Printf("[INFO] OLIVIER2 Retry failed on timeout (end) ElasticSearch domain %s: %v", domainName, err)
 		return fmt.Errorf("Error waiting for ElasticSearch domain to be created: %s", err)
 	}
+	log.Printf("[INFO] OLIVIER2 OK NIL waiting ElasticSearch domain %s", domainName)
 	return nil
 }
 
