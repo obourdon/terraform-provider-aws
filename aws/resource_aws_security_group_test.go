@@ -719,6 +719,36 @@ func TestAccAWSSecurityGroup_basic(t *testing.T) {
 	})
 }
 
+func TestAccAWSSecurityGroup_Issue11059(t *testing.T) {
+	var group ec2.SecurityGroup
+	resourceName := "aws_security_group.test"
+
+	resource.ParallelTest(t, resource.TestCase{
+		PreCheck:      func() { testAccPreCheck(t) },
+		IDRefreshName: resourceName,
+		Providers:     testAccProviders,
+		CheckDestroy:  testAccCheckAWSSecurityGroupDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAWSSecurityGroupConfig_Issue11059(true),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckAWSSecurityGroupExists(resourceName, &group),
+					resource.TestCheckResourceAttr(resourceName, "egress.#", "1"),
+					resource.TestCheckResourceAttr(resourceName, "ingress.#", "1"),
+				),
+			},
+			{
+				Config: testAccAWSSecurityGroupConfig_Issue11059(false),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckAWSSecurityGroupExists(resourceName, &group),
+					resource.TestCheckResourceAttr(resourceName, "egress.#", "0"),
+					resource.TestCheckResourceAttr(resourceName, "ingress.#", "1"),
+				),
+			},
+		},
+	})
+}
+
 func TestAccAWSSecurityGroup_egressConfigMode(t *testing.T) {
 	var securityGroup1, securityGroup2, securityGroup3 ec2.SecurityGroup
 	resourceName := "aws_security_group.test"
@@ -4263,4 +4293,44 @@ resource "aws_security_group" "test" {
   vpc_id = "${aws_vpc.test.id}"
 }
 `)
+}
+
+func testAccAWSSecurityGroupConfig_Issue11059(add_egress bool) string {
+	egress := ""
+	if add_egress {
+		egress = `
+  egress {
+    protocol = "tcp"
+    from_port = 443
+    to_port = 443
+    cidr_blocks = ["10.0.0.0/8"]
+  }
+`
+	}
+	return fmt.Sprintf(`
+resource "aws_vpc" "foo" {
+  cidr_block = "10.1.0.0/16"
+	tags = {
+		Name = "terraform-testacc-security-group-issue-11059"
+	}
+}
+
+resource "aws_security_group" "test" {
+  name = "terraform_acceptance_test_example"
+  description = "Used in the terraform acceptance tests"
+  vpc_id = "${aws_vpc.foo.id}"
+
+  ingress {
+    protocol = "tcp"
+    from_port = 443
+    to_port = 443
+    cidr_blocks = ["10.0.0.0/8"]
+  }
+
+  %s
+	tags = {
+		Name = "tf-acc-test-issue-11059"
+	}
+}
+`, egress)
 }
